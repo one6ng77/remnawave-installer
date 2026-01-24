@@ -22,8 +22,9 @@
 |------|---------|------|
 | 项目根目录| /opt/remnawave | 包含 docker-compose.yml 和 .env 配置文件 |
 | Nginx 网关 | /opt/remnawave/nginx | 包含 nginx.conf 及 SSL 证书文件 |
-| SSL 证书 | /opt/remnawave/nginx/vlongx.pem | 公钥证书 (自动生成) |
-| SSL 密钥 | /opt/remnawave/nginx/vlongx.key | 私钥文件 (自动生成) |
+| Nginx 配置 | /opt/remnawave/nginx/nginx.conf | 反向代理配置文件 |
+| SSL 证书 | /opt/remnawave/nginx/fullchain.pem| 公钥证书 (自动生成) |
+| SSL 密钥 | /opt/remnawave/nginx/privkey.key | 私钥文件 (自动生成) |
 
 
 
