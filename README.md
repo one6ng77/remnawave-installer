@@ -31,8 +31,9 @@
 ## 🚀 一键安装
 请在服务器终端执行以下命令：
 ```bash
-curl -sSL https://raw.githubusercontent.com/vlongx/remnawave-installer/main/install.sh | sudo bash
+curl -O https://raw.githubusercontent.com/vlongx/remnawave-installer/main/install.sh && chmod +x install.sh && ./install.sh
 ```
+
 🛠️ 常用维护命令
 管理面板后端：
 ```bash
