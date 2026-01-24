@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Remnawave Deployment Script
-# Optimized by vlongx (Modular Edition) - SSL Fix Version
+# Optimized by vlongx (Modular Edition) - Let's Encrypt Fix
 # ==============================================================================
 
 # 启用严格模式
@@ -152,15 +152,18 @@ step_setup_gateway() {
         curl https://get.acme.sh | sh -s email="$SSL_EMAIL" >/dev/null
     fi
 
-    # 临时停止可能的 80 端口占用 (修复 Standalone 模式失败问题)
+    # 临时停止可能的 80 端口占用
     systemctl stop nginx >/dev/null 2>&1 || true
     systemctl stop apache2 >/dev/null 2>&1 || true
 
-    log_info "申请 SSL 证书 (Standalone 模式)..."
+    log_info "申请 SSL 证书 (Let's Encrypt 模式)..."
     log_warn "请确保域名已解析到本机 IP，且防火墙已放行 80 端口。"
 
-    # 修改：去掉 >/dev/null 以便查看错误，并增加错误判断
-    if "$acme_script" --issue --standalone -d "$DOMAIN" \
+    # 注册 Let's Encrypt 账户 (防止未注册报错)
+    "$acme_script" --register-account -m "$SSL_EMAIL" --server letsencrypt >/dev/null 2>&1 || true
+
+    # 核心修改：增加 --server letsencrypt 参数
+    if "$acme_script" --issue --server letsencrypt --standalone -d "$DOMAIN" \
         --key-file "$NGINX_DIR/privkey.key" \
         --fullchain-file "$NGINX_DIR/fullchain.pem" \
         --force; then
