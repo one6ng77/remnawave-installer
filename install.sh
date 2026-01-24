@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Remnawave Deployment Script
-# Optimized by vlongx (Final: Auto Firewall + Let's Encrypt)
+# Optimized by vlongx (Final: Auto Firewall + Let's Encrypt + Proxy Fix)
 # ==============================================================================
 
 # 启用严格模式
@@ -141,7 +141,7 @@ step_configure_network() {
     fi
 }
 
-# --- 新增步骤：开放系统防火墙 ---
+# --- 5. 开放防火墙 ---
 step_open_firewall() {
     log_info "正在尝试自动放行防火墙端口 (80/443)..."
     
@@ -161,7 +161,7 @@ step_open_firewall() {
     fi
 }
 
-# --- 5. 网关与 SSL ---
+# --- 6. 网关与 SSL ---
 step_setup_gateway() {
     log_info "配置 Nginx 网关与 SSL..."
     mkdir -p "$NGINX_DIR"
@@ -194,7 +194,7 @@ step_setup_gateway() {
         log_error "SSL 证书申请依然失败！\n\n[严重] 请务必检查您的【云服务器后台安全组】：\n确保 TCP 80 和 TCP 443 端口已对外开放！\n(脚本已尝试放行系统内部防火墙，但无法控制云厂商的安全组)"
     fi
 
-    # 生成 Nginx 配置
+    # 生成 Nginx 配置 (已修复 Proxy Headers)
     cd "$NGINX_DIR"
     
     cat > nginx.conf <<EOF
@@ -226,11 +226,20 @@ server {
     location / {
         proxy_pass http://backend_pool;
         proxy_http_version 1.1;
+        
+        # 基础代理头
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
+        
+        # 真实 IP 透传
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        
+        # 关键修复：告诉后端这是 HTTPS 请求，防止 "Reverse proxy required" 报错
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
     }
 }
 EOF
@@ -268,7 +277,7 @@ main() {
     step_check_dependencies
     step_install_core
     step_configure_network
-    step_open_firewall  # 新增的防火墙步骤
+    step_open_firewall
     step_setup_gateway
     
     echo
