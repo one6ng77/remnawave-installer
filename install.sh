@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Remnawave Deployment Script
-# Optimized by vlongx (Modular Edition) - Let's Encrypt Fix
+# Optimized by vlongx (Final SSL Fix)
 # ==============================================================================
 
 # 启用严格模式
@@ -156,13 +156,18 @@ step_setup_gateway() {
     systemctl stop nginx >/dev/null 2>&1 || true
     systemctl stop apache2 >/dev/null 2>&1 || true
 
-    log_info "申请 SSL 证书 (Let's Encrypt 模式)..."
-    log_warn "请确保域名已解析到本机 IP，且防火墙已放行 80 端口。"
-
-    # 注册 Let's Encrypt 账户 (防止未注册报错)
+    log_info "正在强制切换证书机构为 Let's Encrypt..."
+    
+    # --- 关键修改：强制修改默认 CA ---
+    "$acme_script" --set-default-ca --server letsencrypt >/dev/null 2>&1
+    
+    # 注册 Let's Encrypt 账户
     "$acme_script" --register-account -m "$SSL_EMAIL" --server letsencrypt >/dev/null 2>&1 || true
 
-    # 核心修改：增加 --server letsencrypt 参数
+    log_info "开始申请证书 (Let's Encrypt)..."
+    log_warn "请确保域名已解析到本机 IP，且防火墙已放行 80 端口。"
+
+    # 申请证书
     if "$acme_script" --issue --server letsencrypt --standalone -d "$DOMAIN" \
         --key-file "$NGINX_DIR/privkey.key" \
         --fullchain-file "$NGINX_DIR/fullchain.pem" \
@@ -170,7 +175,7 @@ step_setup_gateway() {
         
         log_success "SSL 证书申请成功！"
     else
-        log_error "SSL 证书申请失败！\n请检查：\n1. 域名是否正确解析到本机 IP\n2. 云服务商防火墙是否开放 80 端口\n3. 是否开启了 Cloudflare 小黄云 (请先关闭)"
+        log_error "SSL 证书申请失败！\n请检查：\n1. 域名是否正确解析到本机 IP\n2. 云服务商防火墙是否开放 80 端口\n3. 必须关闭 Cloudflare 的小黄云 (Proxy)"
     fi
 
     # 生成 Nginx 配置
