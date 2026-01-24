@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Remnawave Deployment Script
-# Optimized by vlongx (Modular Edition)
+# Optimized by vlongx (Modular Edition) - SSL Fix Version
 # ==============================================================================
 
 # 启用严格模式
@@ -152,16 +152,22 @@ step_setup_gateway() {
         curl https://get.acme.sh | sh -s email="$SSL_EMAIL" >/dev/null
     fi
 
+    # 临时停止可能的 80 端口占用 (修复 Standalone 模式失败问题)
+    systemctl stop nginx >/dev/null 2>&1 || true
+    systemctl stop apache2 >/dev/null 2>&1 || true
+
     log_info "申请 SSL 证书 (Standalone 模式)..."
-    
-    # 使用标准 fullchain.pem 和 privkey.key 命名
-    "$acme_script" --issue --standalone -d "$DOMAIN" \
+    log_warn "请确保域名已解析到本机 IP，且防火墙已放行 80 端口。"
+
+    # 修改：去掉 >/dev/null 以便查看错误，并增加错误判断
+    if "$acme_script" --issue --standalone -d "$DOMAIN" \
         --key-file "$NGINX_DIR/privkey.key" \
         --fullchain-file "$NGINX_DIR/fullchain.pem" \
-        --force >/dev/null 2>&1
-
-    if [[ ! -f "$NGINX_DIR/fullchain.pem" ]]; then
-        log_error "SSL 证书申请失败，请检查 80 端口占用或域名解析。"
+        --force; then
+        
+        log_success "SSL 证书申请成功！"
+    else
+        log_error "SSL 证书申请失败！\n请检查：\n1. 域名是否正确解析到本机 IP\n2. 云服务商防火墙是否开放 80 端口\n3. 是否开启了 Cloudflare 小黄云 (请先关闭)"
     fi
 
     # 生成 Nginx 配置
