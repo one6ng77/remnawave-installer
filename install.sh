@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Remnawave Deployment Script
-# Optimized by vlongx (Final SSL Fix)
+# Optimized by vlongx (Final: Auto Firewall + Let's Encrypt)
 # ==============================================================================
 
 # 启用严格模式
@@ -141,6 +141,26 @@ step_configure_network() {
     fi
 }
 
+# --- 新增步骤：开放系统防火墙 ---
+step_open_firewall() {
+    log_info "正在尝试自动放行防火墙端口 (80/443)..."
+    
+    # 尝试 iptables
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
+        iptables -I INPUT -p tcp --dport 443 -j ACCEPT >/dev/null 2>&1 || true
+    fi
+
+    # 尝试 ufw (Ubuntu常用)
+    if command -v ufw >/dev/null 2>&1; then
+        if ufw status | grep -q "Status: active"; then
+            ufw allow 80/tcp >/dev/null 2>&1 || true
+            ufw allow 443/tcp >/dev/null 2>&1 || true
+            log_success "已通过 UFW 放行端口"
+        fi
+    fi
+}
+
 # --- 5. 网关与 SSL ---
 step_setup_gateway() {
     log_info "配置 Nginx 网关与 SSL..."
@@ -156,17 +176,12 @@ step_setup_gateway() {
     systemctl stop nginx >/dev/null 2>&1 || true
     systemctl stop apache2 >/dev/null 2>&1 || true
 
-    log_info "正在强制切换证书机构为 Let's Encrypt..."
-    
-    # --- 关键修改：强制修改默认 CA ---
+    # 强制切换证书机构
     "$acme_script" --set-default-ca --server letsencrypt >/dev/null 2>&1
-    
-    # 注册 Let's Encrypt 账户
     "$acme_script" --register-account -m "$SSL_EMAIL" --server letsencrypt >/dev/null 2>&1 || true
 
     log_info "开始申请证书 (Let's Encrypt)..."
-    log_warn "请确保域名已解析到本机 IP，且防火墙已放行 80 端口。"
-
+    
     # 申请证书
     if "$acme_script" --issue --server letsencrypt --standalone -d "$DOMAIN" \
         --key-file "$NGINX_DIR/privkey.key" \
@@ -175,7 +190,8 @@ step_setup_gateway() {
         
         log_success "SSL 证书申请成功！"
     else
-        log_error "SSL 证书申请失败！\n请检查：\n1. 域名是否正确解析到本机 IP\n2. 云服务商防火墙是否开放 80 端口\n3. 必须关闭 Cloudflare 的小黄云 (Proxy)"
+        echo
+        log_error "SSL 证书申请依然失败！\n\n[严重] 请务必检查您的【云服务器后台安全组】：\n确保 TCP 80 和 TCP 443 端口已对外开放！\n(脚本已尝试放行系统内部防火墙，但无法控制云厂商的安全组)"
     fi
 
     # 生成 Nginx 配置
@@ -252,6 +268,7 @@ main() {
     step_check_dependencies
     step_install_core
     step_configure_network
+    step_open_firewall  # 新增的防火墙步骤
     step_setup_gateway
     
     echo
