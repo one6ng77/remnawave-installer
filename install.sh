@@ -1,61 +1,60 @@
 #!/bin/bash
 # ==============================================================================
-# VLONGX DEPLOYMENT SCRIPT - REMNAWAVE (STANDARD PATH EDITION)
-# Codebase: Modular Bash
-# Tag: vlongx-v2
+# Remnawave Deployment Script
+# Optimized by vlongx (Modular Edition)
 # ==============================================================================
 
-# 启用安全模式
+# 启用严格模式
 set -o errexit
 set -o pipefail
 set -o nounset
 
-# --- 核心路径定义 (保持原版结构) ---
-VX_ROOT_PATH="/opt/remnawave"
-VX_NGINX_PATH="/opt/remnawave/nginx"
-VX_NET_ID="remnawave-network" # 保持原版网络名称以兼容默认配置
+# --- 核心路径定义 ---
+INSTALL_DIR="/opt/remnawave"
+NGINX_DIR="/opt/remnawave/nginx"
+NETWORK_NAME="remnawave-network"
 
-# --- UI 与日志函数 ---
+# --- 日志函数 ---
 C_RESET='\033[0m'
 C_CYAN='\033[36m'
-C_YELLOW='\033[33m'
 C_RED='\033[31m'
 C_GREEN='\033[32m'
+C_YELLOW='\033[33m'
 
-vx_msg() { printf "${C_CYAN}[VLONGX] %s${C_RESET}\n" "$1"; }
-vx_alert() { printf "${C_YELLOW}[VLONGX | ATTENTION] %s${C_RESET}\n" "$1"; }
-vx_fail() { printf "${C_RED}[VLONGX | ERROR] %s${C_RESET}\n" "$1"; exit 1; }
-vx_done() { printf "${C_GREEN}[VLONGX | SUCCESS] %s${C_RESET}\n" "$1"; }
-vx_keygen() { openssl rand -hex "$1"; }
+log_info() { printf "${C_CYAN}[INFO] %s${C_RESET}\n" "$1"; }
+log_warn() { printf "${C_YELLOW}[WARN] %s${C_RESET}\n" "$1"; }
+log_error() { printf "${C_RED}[ERROR] %s${C_RESET}\n" "$1"; exit 1; }
+log_success() { printf "${C_GREEN}[SUCCESS] %s${C_RESET}\n" "$1"; }
+generate_key() { openssl rand -hex "$1"; }
 
 # 权限校验
 if [[ $EUID -ne 0 ]]; then
-    vx_fail "必须使用 ROOT 权限运行此脚本 (sudo bash install.sh)"
+    log_error "必须使用 ROOT 权限运行此脚本 (sudo bash install.sh)"
 fi
 
-# --- 1. 数据采集模块 ---
-module_input() {
+# --- 1. 信息采集 ---
+step_collect_input() {
     echo ""
     echo "================================================="
-    echo "   Remnawave Deployment (Vlongx Optimized)"
+    echo "   Remnawave One-Click Installer"
     echo "================================================="
     
-    read -rp "请输入面板域名 (例如: panel.com): " VX_DOMAIN
-    [[ -z "$VX_DOMAIN" ]] && vx_fail "域名不能为空"
+    read -rp "请输入面板域名 (例如: panel.example.com): " DOMAIN
+    [[ -z "$DOMAIN" ]] && log_error "域名不能为空"
 
-    read -rp "请输入订阅域名 (留空则同上): " VX_SUB
-    [[ -z "$VX_SUB" ]] && VX_SUB="$VX_DOMAIN"
+    read -rp "请输入订阅域名 (留空则同上): " SUB_DOMAIN
+    [[ -z "$SUB_DOMAIN" ]] && SUB_DOMAIN="$DOMAIN"
 
-    read -rp "请输入 SSL 证书邮箱: " VX_EMAIL
-    [[ -z "$VX_EMAIL" ]] && vx_fail "邮箱不能为空"
+    read -rp "请输入 SSL 证书邮箱: " SSL_EMAIL
+    [[ -z "$SSL_EMAIL" ]] && log_error "邮箱不能为空"
 
-    VX_SUB_URL="https://${VX_SUB}/api/sub"
-    vx_msg "目标路径: ${VX_ROOT_PATH}"
+    SUB_URL="https://${SUB_DOMAIN}/api/sub"
+    log_info "安装目录: ${INSTALL_DIR}"
 }
 
-# --- 2. 环境依赖模块 ---
-module_dependencies() {
-    vx_msg "初始化系统依赖..."
+# --- 2. 环境依赖 ---
+step_check_dependencies() {
+    log_info "检查系统依赖..."
     apt-get update -qq >/dev/null
     for pkg in curl socat cron openssl git; do
         if ! command -v "$pkg" &> /dev/null; then
@@ -65,110 +64,110 @@ module_dependencies() {
 
     # Docker 检查
     if ! command -v docker &> /dev/null; then
-        vx_msg "安装 Docker..."
+        log_info "安装 Docker..."
         curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
     fi
 
     if ! docker compose version &> /dev/null; then
-        vx_fail "未检测到 Docker Compose 插件，请检查 Docker 版本。"
+        log_error "未检测到 Docker Compose 插件，请检查 Docker 版本。"
     fi
 }
 
-# --- 3. 核心应用部署模块 ---
-module_core_install() {
-    vx_msg "部署 Remnawave 核心..."
-    mkdir -p "$VX_ROOT_PATH"
-    cd "$VX_ROOT_PATH"
+# --- 3. 核心部署 ---
+step_install_core() {
+    log_info "部署 Remnawave 核心..."
+    mkdir -p "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
 
     local REMOTE_BASE="https://raw.githubusercontent.com/remnawave/backend/refs/heads/main"
 
-    # 配置文件下载与处理
+    # 下载配置文件
     if [[ ! -f docker-compose.yml ]]; then
         curl -sL -o docker-compose.yml "${REMOTE_BASE}/docker-compose-prod.yml"
     fi
 
     if [[ ! -f .env ]]; then
-        vx_msg "生成高强度安全密钥 (.env)..."
+        log_info "生成安全配置文件 (.env)..."
         curl -sL -o .env "${REMOTE_BASE}/.env.sample"
 
-        local db_pwd=$(vx_keygen 24)
+        local db_pwd=$(generate_key 24)
         
-        # 使用 sed 批量替换，保持代码整洁
+        # 生成随机密钥
         sed -i \
-            -e "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(vx_keygen 64)/" \
-            -e "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(vx_keygen 64)/" \
-            -e "s/^METRICS_PASS=.*/METRICS_PASS=$(vx_keygen 64)/" \
-            -e "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(vx_keygen 64)/" \
+            -e "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(generate_key 64)/" \
+            -e "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(generate_key 64)/" \
+            -e "s/^METRICS_PASS=.*/METRICS_PASS=$(generate_key 64)/" \
+            -e "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(generate_key 64)/" \
             -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${db_pwd}/" \
             .env
 
-        # 深度替换数据库连接串
+        # 更新数据库连接串
         sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^@]*\(@.*\)|\1${db_pwd}\2|" .env
 
-        # 订阅域名注入
+        # 设置订阅域名
         if grep -q "^SUB_PUBLIC_DOMAIN=" .env; then
-            sed -i "s|^SUB_PUBLIC_DOMAIN=.*|SUB_PUBLIC_DOMAIN=${VX_SUB_URL}|" .env
+            sed -i "s|^SUB_PUBLIC_DOMAIN=.*|SUB_PUBLIC_DOMAIN=${SUB_URL}|" .env
         else
-            echo "SUB_PUBLIC_DOMAIN=${VX_SUB_URL}" >> .env
+            echo "SUB_PUBLIC_DOMAIN=${SUB_URL}" >> .env
         fi
     fi
 
-    vx_msg "启动后端容器..."
+    log_info "启动后端容器..."
     docker compose up -d --quiet-pull
 }
 
-# --- 4. 网络修复模块 ---
-module_network_fix() {
-    vx_msg "执行 Docker 网络桥接修复..."
+# --- 4. 网络配置 ---
+step_configure_network() {
+    log_info "配置 Docker 网络桥接..."
     
-    # 确保网络存在
-    docker network inspect "$VX_NET_ID" >/dev/null 2>&1 || docker network create "$VX_NET_ID" >/dev/null
+    # 创建网络
+    docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create "$NETWORK_NAME" >/dev/null
 
-    # 智能搜寻容器 ID (兼容性写法)
+    # 查找容器 ID
     local target_cid=""
-    # 尝试方法 A: 通过 Label
+    # 尝试通过标签查找
     target_cid=$(docker ps --filter "label=com.docker.compose.project=remnawave" -q | head -n 1)
-    # 尝试方法 B: 通过 Image 名称关键字
+    # 如果失败，尝试通过名称关键字查找
     if [[ -z "$target_cid" ]]; then
         target_cid=$(docker ps | grep "remnawave" | awk '{print $1}' | head -n 1)
     fi
 
     if [[ -n "$target_cid" ]]; then
-        # 忽略已连接的错误
-        docker network connect "$VX_NET_ID" "$target_cid" >/dev/null 2>&1 || true
-        vx_done "后端容器已桥接至 ${VX_NET_ID}"
+        # 连接网络 (忽略已存在错误)
+        docker network connect "$NETWORK_NAME" "$target_cid" >/dev/null 2>&1 || true
+        log_success "后端容器已加入网络: ${NETWORK_NAME}"
     else
-        vx_alert "自动桥接失败: 未找到后端容器，Nginx 可能无法连接。"
+        log_warn "自动桥接失败: 未找到后端容器，Nginx 可能无法连接，请手动检查。"
     fi
 }
 
-# --- 5. 证书与 Nginx 模块 ---
-module_gateway_layer() {
-    vx_msg "配置 Nginx 网关层..."
-    mkdir -p "$VX_NGINX_PATH"
+# --- 5. 网关与 SSL ---
+step_setup_gateway() {
+    log_info "配置 Nginx 网关与 SSL..."
+    mkdir -p "$NGINX_DIR"
     
-    # ACME 证书申请
+    # 安装 acme.sh
     local acme_script="$HOME/.acme.sh/acme.sh"
     if [[ ! -f "$acme_script" ]]; then
-        curl https://get.acme.sh | sh -s email="$VX_EMAIL" >/dev/null
+        curl https://get.acme.sh | sh -s email="$SSL_EMAIL" >/dev/null
     fi
 
-    vx_msg "申请 SSL 证书 (Standalone Mode)..."
-    # 使用 vlongx 命名前缀以示区别，但在 Nginx 配置中对应即可
-    "$acme_script" --issue --standalone -d "$VX_DOMAIN" \
-        --key-file "$VX_NGINX_PATH/vlongx.key" \
-        --fullchain-file "$VX_NGINX_PATH/vlongx.pem" \
+    log_info "申请 SSL 证书 (Standalone 模式)..."
+    
+    # 使用标准 fullchain.pem 和 privkey.key 命名
+    "$acme_script" --issue --standalone -d "$DOMAIN" \
+        --key-file "$NGINX_DIR/privkey.key" \
+        --fullchain-file "$NGINX_DIR/fullchain.pem" \
         --force >/dev/null 2>&1
 
-    if [[ ! -f "$VX_NGINX_PATH/vlongx.pem" ]]; then
-        vx_fail "SSL 证书申请失败，请检查 80 端口占用或域名解析。"
+    if [[ ! -f "$NGINX_DIR/fullchain.pem" ]]; then
+        log_error "SSL 证书申请失败，请检查 80 端口占用或域名解析。"
     fi
 
     # 生成 Nginx 配置
-    cd "$VX_NGINX_PATH"
+    cd "$NGINX_DIR"
     
     cat > nginx.conf <<EOF
-# VLONGX GENERATED CONFIG
 upstream backend_pool {
     server remnawave:3000;
 }
@@ -176,7 +175,7 @@ upstream backend_pool {
 server {
     listen 80;
     listen [::]:80;
-    server_name ${VX_DOMAIN};
+    server_name ${DOMAIN};
     return 301 https://\$host\$request_uri;
 }
 
@@ -184,10 +183,10 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
-    server_name ${VX_DOMAIN};
+    server_name ${DOMAIN};
 
-    ssl_certificate /etc/nginx/ssl/vlongx.pem;
-    ssl_certificate_key /etc/nginx/ssl/vlongx.key;
+    ssl_certificate /etc/nginx/ssl/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/privkey.key;
     
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
@@ -206,7 +205,7 @@ server {
 }
 EOF
 
-    # 生成 Nginx Compose
+    # 生成 Docker Compose (Nginx)
     cat > docker-compose.yml <<EOF
 services:
   nginx-gateway:
@@ -218,37 +217,42 @@ services:
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./vlongx.pem:/etc/nginx/ssl/vlongx.pem:ro
-      - ./vlongx.key:/etc/nginx/ssl/vlongx.key:ro
+      - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
     networks:
-      - ${VX_NET_ID}
+      - ${NETWORK_NAME}
 
 networks:
-  ${VX_NET_ID}:
+  ${NETWORK_NAME}:
     external: true
 EOF
 
-    vx_msg "启动 Nginx 网关..."
+    log_info "启动 Nginx 网关..."
     docker compose up -d
 }
 
-# --- 主执行流 ---
+# --- 主程序 ---
 main() {
     clear
-    module_input
-    module_dependencies
-    module_core_install
-    module_network_fix
-    module_gateway_layer
+    step_collect_input
+    step_check_dependencies
+    step_install_core
+    step_configure_network
+    step_setup_gateway
     
-    echo ""
-    echo "========================================================"
-    vx_done "安装流程结束 [vlongx-edition]"
-    echo "========================================================"
-    echo " > 面板地址: https://${VX_DOMAIN}"
-    echo " > 订阅 API: ${VX_SUB_URL}"
-    echo " > 安装路径: ${VX_ROOT_PATH}"
-    echo "========================================================"
+    echo
+    echo "=========================================="
+    echo " Remnawave + Nginx 部署完成！"
+    echo "------------------------------------------"
+    echo "面板访问地址：https://${DOMAIN}"
+    echo "订阅域名（SUB_PUBLIC_DOMAIN）：${SUB_DOMAIN}"
+    echo
+    echo "常用命令："
+    echo "  进入 Remnawave 目录：cd ${INSTALL_DIR}"
+    echo "  启动/停止面板：docker compose up -d / docker compose down"
+    echo "  进入 Nginx 目录：cd ${NGINX_DIR}"
+    echo "  启动/停止 Nginx：docker compose up -d / docker compose down"
+    echo "=========================================="
 }
 
 main
