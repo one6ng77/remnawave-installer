@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Remnawave 一键安装脚本
-# 仅适用于 Debian / Ubuntu 系发行版
+# Remnawave 一键安装脚本（修复版 V2）
+# 修复了 volumes 插入位置错误导致 YAML 报错的问题
 
 set -e
 
@@ -8,13 +8,13 @@ INSTALL_DIR="/opt/remnawave"
 NGINX_DIR="/opt/remnawave/nginx"
 
 echo "==============================="
-echo " Remnawave 一键安装脚本"
+echo " Remnawave 一键安装脚本 (修复版)"
 echo "==============================="
 echo
 echo "本脚本将完成以下操作："
 echo "1. 安装 Docker（如未安装）"
 echo "2. 拉取 Remnawave 官方 docker-compose 与 .env"
-echo "3. 修改 docker-compose.yml 增加证书目录映射"
+echo "3. 精准修改 docker-compose.yml 增加证书映射"
 echo "4. 自动生成 JWT / Postgres 等随机密钥"
 echo "5. 设置订阅域名 SUB_PUBLIC_DOMAIN"
 echo "6. 启动 Remnawave 面板容器"
@@ -103,21 +103,22 @@ else
 fi
 
 #------------------------#
-# 4.1 修改 docker-compose.yml 增加证书映射 (新增步骤)
+# 4.1 修改 docker-compose.yml 增加证书映射 (修复逻辑)
 #------------------------#
 echo ">>> 修改 docker-compose.yml 增加 SSL 证书路径映射..."
 
-# 定义要添加的映射路径
-VOLUME_MAPPING="- '/opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl'"
+# 修复点：不再匹配所有 "volumes:"，而是匹配 remnawave 服务独有的 ".env" 映射行
+# 在该行后面追加 Nginx 证书映射
+TARGET_LINE="- ./.env:/app/.env"
+ADD_LINE="      - '/opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl'"
 
-# 检查文件中是否已存在该映射，避免重复添加
-if ! grep -q "/var/lib/remnawave/configs/xray/ssl" docker-compose.yml; then
-  # 使用 sed 在 'volumes:' 关键字的下一行插入映射
-  # 假设 yaml 缩进通常为 2-4 空格，这里插入 6 个空格的缩进以尝试匹配层级
-  sed -i "/volumes:/a \\      $VOLUME_MAPPING" docker-compose.yml
-  echo ">>> 已成功将 Nginx 证书目录映射添加到 docker-compose.yml"
-else
+if grep -q "/var/lib/remnawave/configs/xray/ssl" docker-compose.yml; then
   echo ">>> 提示：证书映射路径已存在，跳过修改。"
+else
+  # 查找 .env 映射行，并在其后追加新的一行
+  # 使用 | 作为 sed 分隔符以避免路径斜杠冲突
+  sed -i "\|$TARGET_LINE|a \\$ADD_LINE" docker-compose.yml
+  echo ">>> 已成功将 Nginx 证书目录映射添加到 docker-compose.yml (Remnawave 服务下)"
 fi
 
 #------------------------#
@@ -247,55 +248,4 @@ server {
 
 server {
     listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    server_name _;
-    
-    ssl_certificate "/etc/nginx/ssl/fullchain.pem";
-    ssl_certificate_key "/etc/nginx/ssl/privkey.key";
-    
-    return 444;
-}
-EOF
-
-#------------------------#
-# 11. 生成 Nginx 的 docker-compose.yml
-#------------------------#
-echo ">>> 生成 Nginx docker-compose.yml ..."
-
-cat > "$NGINX_DIR/docker-compose.yml" <<'EOF'
-services:
-  remnawave-nginx:
-    image: nginx:1.28
-    container_name: remnawave-nginx
-    hostname: remnawave-nginx
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-      - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
-    restart: always
-    ports:
-      - '0.0.0.0:80:80'
-      - '0.0.0.0:443:443'
-    networks:
-      - remnawave-network
-
-networks:
-  remnawave-network:
-    name: remnawave-network
-    external: true
-EOF
-
-#------------------------#
-# 12. 启动 Nginx 反代容器
-#------------------------#
-echo ">>> 启动 Nginx 反向代理容器 ..."
-cd "$NGINX_DIR"
-docker compose up -d
-
-echo
-echo "=========================================="
-echo " Remnawave 面板 + Nginx 已全部部署完成！"
-echo "------------------------------------------"
-echo "面板访问地址：https://$MAIN_DOMAIN"
-echo "订阅域名（SUB_PUBLIC_DOMAIN）：$SUB_DOMAIN"
-echo "=========================================="
+    listen [::]:443 ssl
