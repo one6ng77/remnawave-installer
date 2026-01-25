@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Remnawave 一键安装脚本（终极修复版）
-# 方式：直接生成配置好的 docker-compose.yml，避免 sed 修改导致格式错误
+# Remnawave 一键安装脚本（最终稳定版）
 
 set -e
 
@@ -8,14 +7,15 @@ INSTALL_DIR="/opt/remnawave"
 NGINX_DIR="/opt/remnawave/nginx"
 
 echo "==============================="
-echo " Remnawave 一键安装脚本 (终极修复版)"
+echo " Remnawave 一键安装脚本 (最终稳定版)"
 echo "==============================="
 echo
 echo "本脚本将完成以下操作："
-echo "1. 清理旧的错误配置文件"
-echo "2. 直接写入包含 SSL 映射和网络配置的 docker-compose.yml"
-echo "3. 自动生成密钥并配置环境"
-echo "4. 申请证书并启动服务"
+echo "1. 环境清理与重置"
+echo "2. 生成正确的 docker-compose.yml (含 SSL 映射)"
+echo "3. 自动配置 .env 密钥"
+echo "4. 使用 Let's Encrypt 申请证书 (解决卡顿问题)"
+echo "5. 启动 Nginx 反代"
 echo
 
 #------------------------#
@@ -51,7 +51,7 @@ fi
 #------------------------#
 echo ">>> 安装基础依赖..."
 apt-get update -y
-apt-get install -y curl socat cron openssl
+apt-get install -y curl socat cron openssl lsof
 
 if ! command -v docker >/dev/null 2>&1; then
   echo ">>> 安装 Docker..."
@@ -71,7 +71,7 @@ echo ">>> 正在重置配置文件..."
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# 删除可能损坏的旧文件
+# 删除旧配置防止冲突
 rm -f docker-compose.yml
 
 # 下载 .env 模板 (如果不存在)
@@ -83,9 +83,8 @@ fi
 #------------------------#
 # 4. 写入正确的 docker-compose.yml
 #------------------------#
-echo ">>> 生成预配置的 docker-compose.yml (含 SSL 映射与网络)..."
+echo ">>> 生成预配置的 docker-compose.yml..."
 
-# 这里直接写入正确的文件内容，不再使用 sed 修改
 cat > docker-compose.yml <<EOF
 services:
   remnawave:
@@ -99,7 +98,7 @@ services:
       - .env
     volumes:
       - ./.env:/app/.env
-      # 证书映射路径 (核心修改)
+      # 证书映射路径
       - /opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl
     networks:
       - remnawave-network
@@ -124,13 +123,11 @@ networks:
     external: false
 EOF
 
-echo ">>> docker-compose.yml 生成完毕。"
-
 #------------------------#
 # 5. 自动配置 .env
 #------------------------#
 echo ">>> 配置 .env 密钥..."
-# 仅当密钥未设置时才生成，防止覆盖已有配置
+# 仅当密钥未设置时才生成
 if grep -q "JWT_AUTH_SECRET=change_me" .env; then
     sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" .env
     sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" .env
@@ -156,10 +153,14 @@ echo ">>> 启动 Remnawave 面板..."
 docker compose up -d
 
 #------------------------#
-# 7. Nginx 与 证书
+# 7. Nginx 与 证书 (核心修复部分)
 #------------------------#
-echo ">>> 配置 Nginx 与 证书..."
+echo ">>> 准备申请证书..."
 mkdir -p "$NGINX_DIR"
+
+# 停止可能占用 80 端口的 Nginx 容器，防止 acme 失败
+echo ">>> 暂时停止 Nginx 容器以释放 80 端口..."
+docker stop remnawave-nginx >/dev/null 2>&1 || true
 
 # 安装 acme.sh
 if [ ! -d "$HOME/.acme.sh" ]; then
@@ -167,12 +168,23 @@ if [ ! -d "$HOME/.acme.sh" ]; then
 fi
 ACME_SH="$HOME/.acme.sh/acme.sh"
 
+# 切换到 Let's Encrypt (比 ZeroSSL 更稳定)
+echo ">>> 切换 CA 为 Let's Encrypt..."
+$ACME_SH --set-default-ca --server letsencrypt
+
 # 申请证书
-echo ">>> 申请证书..."
+echo ">>> 开始申请证书 (Standalone 模式)..."
 $ACME_SH --issue --standalone -d "$MAIN_DOMAIN" \
   --key-file "$NGINX_DIR/privkey.key" \
   --fullchain-file "$NGINX_DIR/fullchain.pem" \
   --force
+
+if [ ! -f "$NGINX_DIR/fullchain.pem" ]; then
+    echo "错误：证书申请失败！请检查："
+    echo "1. 您的域名 $MAIN_DOMAIN 是否已解析到本机 IP？"
+    echo "2. 防火墙是否放行了 80 端口？"
+    exit 1
+fi
 
 # 写入 Nginx 配置
 cat > "$NGINX_DIR/nginx.conf" <<EOF
