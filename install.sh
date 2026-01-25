@@ -1,342 +1,131 @@
 #!/usr/bin/env bash
-# Remnawave 一键安装脚本 (已添加 SSL 路径映射)
+# Remnawave 一键安装脚本 (修复 YAML 格式错误版)
 # 仅适用于 Debian / Ubuntu 系发行版
+
+# 遇到错误立即退出
 set -e
+
+# --- 核心路径 ---
 INSTALL_DIR="/opt/remnawave"
 NGINX_DIR="/opt/remnawave/nginx"
+NETWORK_NAME="remnawave-network"
 
 echo "==============================="
-echo " Remnawave 一键安装脚本 (含 SSL 映射)"
+echo " Remnawave 修复部署"
 echo "==============================="
-echo
 
-#------------------------#
-# 0. 检查 root 权限
-#------------------------#
+# 0. 检查 Root
 if [ "$EUID" -ne 0 ]; then
-  echo "请使用 root 运行本脚本（例如：sudo bash remnawave-onekey.sh）"
+  echo "请使用 root 运行本脚本"
   exit 1
 fi
 
-#------------------------#
-# 1. 交互获取域名与邮箱
-#------------------------#
-read -rp "请输入用于【面板访问】的域名（例如 panel.example.com）: " MAIN_DOMAIN
-if [ -z "$MAIN_DOMAIN" ]; then
-  echo "域名不能为空，退出。"
-  exit 1
-fi
+# 1. 采集信息
+read -rp "请输入面板域名 (例如: panel.example.com): " MAIN_DOMAIN
+[[ -z "$MAIN_DOMAIN" ]] && echo "域名不能为空" && exit 1
 
-read -rp "请输入用于【订阅地址】的域名（可留空，留空则与面板域名相同）: " SUB_DOMAIN
-if [ -z "$SUB_DOMAIN" ]; then
-  SUB_DOMAIN="$MAIN_DOMAIN"
-fi
+read -rp "请输入订阅域名 (留空同上): " SUB_DOMAIN
+[[ -z "$SUB_DOMAIN" ]] && SUB_DOMAIN="$MAIN_DOMAIN"
 
-read -rp "请输入用于申请证书的邮箱（例如 admin@example.com）: " EMAIL
-if [ -z "$EMAIL" ]; then
-  echo "邮箱不能为空，退出。"
-  exit 1
-fi
+read -rp "请输入 SSL 邮箱: " EMAIL
+[[ -z "$EMAIL" ]] && echo "邮箱不能为空" && exit 1
 
-echo
-echo "面板域名: $MAIN_DOMAIN"
-echo "订阅域名: $SUB_DOMAIN"
-echo "证书邮箱: $EMAIL"
-echo
+SUB_URL="https://${SUB_DOMAIN}/api/sub"
 
-#------------------------#
-# 2. 安装基础依赖
-#------------------------#
-echo ">>> 更新软件源并安装基础依赖 (curl, socat, cron, openssl)..."
-apt-get update -y
-apt-get install -y curl socat cron openssl
+# 2. 基础依赖与 Docker
+echo ">>> 检查依赖..."
+apt-get update -y >/dev/null 2>&1
+apt-get install -y curl socat cron openssl lsof iptables ufw git >/dev/null 2>&1
 
-#------------------------#
-# 3. 安装 Docker
-#------------------------#
 if ! command -v docker >/dev/null 2>&1; then
-  echo ">>> 未检测到 Docker，正在安装 Docker..."
+  echo ">>> 安装 Docker..."
   curl -fsSL https://get.docker.com | sh
-else
-  echo ">>> 已检测到 Docker，跳过安装。"
+  systemctl enable docker
+  systemctl start docker
 fi
 
-# 确保 docker compose 子命令可用
-if ! docker compose version >/dev/null 2>&1; then
-  echo "警告：未检测到 docker compose 插件，请确认 Docker 已正确安装支持 'docker compose' 子命令。"
-fi
-
-#------------------------#
-# 4. 创建目录并生成 docker-compose (已修改)
-#------------------------#
-echo ">>> 创建 Remnawave 目录并生成 docker-compose 与 .env.sample ..."
+# 3. 重新生成配置文件 (修复缩进问题)
+echo ">>> 重新生成 Remnawave 配置..."
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# [修改点] 直接写入 docker-compose.yml，包含你要求的 volumes 映射
+# 删除旧文件，防止干扰
+rm -f docker-compose.yml
+
+# 下载 .env 模板
+if [ ! -f .env ]; then
+  curl -o .env https://raw.githubusercontent.com/remnawave/backend/refs/heads/main/.env.sample >/dev/null 2>&1
+fi
+
+# ----------------------------------------------------------------------
+# 重点修复：生成纯净的 docker-compose.yml，严禁在 YAML 中乱加注释
+# ----------------------------------------------------------------------
 cat > docker-compose.yml <<EOF
-x-common: &common
-  ulimits:
-    nofile:
-      soft: 1048576
-      hard: 1048576
-  restart: always
-  networks:
-    - remnawave-network
-
-x-logging: &logging
-  logging:
-    driver: json-file
-    options:
-      max-size: 100m
-      max-file: 5
-
-x-env: &env
-  env_file: .env
-
 services:
   remnawave:
-    image: remnawave/backend:2
-    container_name: remnawave
-    hostname: remnawave
-    <<: [*common, *logging, *env]
+    image: ghcr.io/remnawave/backend:latest
+    restart: always
+    depends_on:
+      - postgres
     ports:
-      - 127.0.0.1:3000:${APP_PORT:-3000}
-      - 127.0.0.1:3001:${METRICS_PORT:-3001}
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env
+      - /opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl
     networks:
       - remnawave-network
-      - '/opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl'
-    healthcheck:
-      test: ['CMD-SHELL', 'curl -f http://localhost:${METRICS_PORT:-3001}/health']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      remnawave-db:
-        condition: service_healthy
-      remnawave-redis:
-        condition: service_healthy
 
-  remnawave-db:
-    image: postgres:17.6
-    container_name: remnawave-db
-    hostname: remnawave-db
-    <<: [*common, *logging, *env]
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - TZ=UTC
-    ports:
-      - 127.0.0.1:6767:5432
+  postgres:
+    image: postgres:16-alpine
+    restart: always
     volumes:
-      - remnawave-db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
-      interval: 3s
-      timeout: 10s
-      retries: 3
-
-  remnawave-redis:
-    image: valkey/valkey:8.1-alpine
-    container_name: remnawave-redis
-    hostname: remnawave-redis
-    <<: [*common, *logging]
-    command: >
-      valkey-server
-      --save ""
-      --appendonly no
-      --maxmemory-policy noeviction
-      --loglevel warning
-    healthcheck:
-      test: ['CMD', 'valkey-cli', 'ping']
-      interval: 3s
-      timeout: 3s
-      retries: 3
-
-networks:
-  remnawave-network:
-    name: remnawave-network
-    driver: bridge
-    external: false
+      - remnawave-db:/var/lib/postgresql/data
+    env_file:
+      - .env
+    networks:
+      - remnawave-network
 
 volumes:
-  remnawave-db-data:
-    name: remnawave-db-data
-    driver: local
-    external: false
-EOF
-
-# 下载 .env.sample 并复制为 .env
-if [ ! -f .env ]; then
-  curl -o .env https://raw.githubusercontent.com/remnawave/backend/refs/heads/main/.env.sample
-else
-  echo "提示：已存在 .env，跳过下载 .env.sample。"
-fi
-
-#------------------------#
-# 5. 自动配置 .env（生成密钥 & DB 密码）
-#------------------------#
-echo ">>> 自动生成 JWT / API / METRICS / WEBHOOK 等随机密钥..."
-
-sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" .env
-sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" .env
-sed -i "s/^METRICS_PASS=.*/METRICS_PASS=$(openssl rand -hex 64)/" .env
-sed -i "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(openssl rand -hex 64)/" .env
-
-echo ">>> 生成 Postgres 密码并写入 .env ..."
-pw=$(openssl rand -hex 24)
-sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env
-# 更新 DATABASE_URL 中的密码
-sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^@]*\(@.*\)|\1$pw\2|" .env
-
-#------------------------#
-# 6. 设置订阅域名 SUB_PUBLIC_DOMAIN
-#------------------------#
-echo ">>> 设置 SUB_PUBLIC_DOMAIN 为: ${SUB_DOMAIN}/api/sub"
-
-if grep -q "^SUB_PUBLIC_DOMAIN=" .env; then
-  sed -i "s|^SUB_PUBLIC_DOMAIN=.*|SUB_PUBLIC_DOMAIN=${SUB_DOMAIN}/api/sub|" .env
-else
-  echo "SUB_PUBLIC_DOMAIN=${SUB_DOMAIN}/api/sub" >> .env
-fi
-
-#------------------------#
-# 7. 启动 Remnawave 容器
-#------------------------#
-echo ">>> 启动 Remnawave 面板容器..."
-docker compose up -d
-
-echo ">>> Remnawave 后端容器已启动。"
-
-#------------------------#
-# 8. 确保网络存在 (补充步骤)
-#------------------------#
-# 这里的步骤主要用于兼容 Nginx，虽然 docker-compose 已经创建了网络，但确保万无一失
-docker network inspect remnawave-network >/dev/null 2>&1 || docker network create remnawave-network
-
-#------------------------#
-# 9. 安装 acme.sh 并申请证书
-#------------------------#
-echo ">>> 安装 acme.sh ..."
-if [ ! -d "$HOME/.acme.sh" ]; then
-  curl https://get.acme.sh | sh -s email="$EMAIL"
-else
-  echo "提示：已检测到 ~/.acme.sh，跳过安装。"
-fi
-
-# 使用绝对路径调用 acme.sh
-ACME_SH="$HOME/.acme.sh/acme.sh"
-
-mkdir -p "$NGINX_DIR"
-
-echo ">>> 使用 acme.sh 申请证书（standalone + alpn，端口 8443）..."
-$ACME_SH --issue --standalone -d "$MAIN_DOMAIN" \
-  --key-file "$NGINX_DIR/privkey.key" \
-  --fullchain-file "$NGINX_DIR/fullchain.pem" \
-  --alpn --tlsport 8443
-
-echo ">>> 证书申请完成，已保存到："
-echo "    $NGINX_DIR/privkey.key"
-echo "    $NGINX_DIR/fullchain.pem"
-
-#------------------------#
-# 10. 生成 nginx.conf
-#------------------------#
-echo ">>> 生成 Nginx 配置文件 nginx.conf ..."
-
-cat > "$NGINX_DIR/nginx.conf" <<EOF
-upstream remnawave {
-    server remnawave:3000;
-}
-
-server {
-    server_name $MAIN_DOMAIN;
-
-    listen 443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
-    http2 on;
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_pass http://remnawave;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    # SSL Configuration
-    ssl_protocols          TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305;
-
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:MozSSL:10m;
-    ssl_session_tickets    off;
-    ssl_certificate "/etc/nginx/ssl/fullchain.pem";
-    ssl_certificate_key "/etc/nginx/ssl/privkey.key";
-    ssl_trusted_certificate "/etc/nginx/ssl/fullchain.pem";
-
-    ssl_stapling           on;
-    ssl_stapling_verify    on;
-    resolver               1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 208.67.222.222 208.67.220.220 valid=60s;
-    resolver_timeout       2s;
-
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
-}
-
-server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    server_name _;
-    ssl_reject_handshake on;
-}
-EOF
-
-#------------------------#
-# 11. 生成 Nginx 的 docker-compose.yml
-#------------------------#
-echo ">>> 生成 Nginx docker-compose.yml ..."
-
-cat > "$NGINX_DIR/docker-compose.yml" <<'EOF'
-services:
-  remnawave-nginx:
-    image: nginx:1.28
-    container_name: remnawave-nginx
-    hostname: remnawave-nginx
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-      - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
-    restart: always
-    ports:
-      - '0.0.0.0:443:443'
-    networks:
-      - remnawave-network
+  remnawave-db:
 
 networks:
   remnawave-network:
     name: remnawave-network
     driver: bridge
-    external: true
+    external: false
 EOF
+# ----------------------------------------------------------------------
 
-#------------------------#
-# 12. 启动 Nginx 反代容器
-#------------------------#
-echo ">>> 启动 Nginx 反向代理容器 ..."
-cd "$NGINX_DIR"
+# 自动配置 .env
+echo ">>> 配置密钥..."
+if grep -q "JWT_AUTH_SECRET=change_me" .env; then
+  sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" .env
+  sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" .env
+  sed -i "s/^METRICS_PASS=.*/METRICS_PASS=$(openssl rand -hex 64)/" .env
+  sed -i "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(openssl rand -hex 64)/" .env
+  
+  pw=$(openssl rand -hex 24)
+  sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env
+  sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^@]*\(@.*\)|\1$pw\2|" .env
+fi
+
+if grep -q "^SUB_PUBLIC_DOMAIN=" .env; then
+  sed -i "s|^SUB_PUBLIC_DOMAIN=.*|SUB_PUBLIC_DOMAIN=${SUB_URL}|" .env
+else
+  echo "SUB_PUBLIC_DOMAIN=${SUB_URL}" >> .env
+fi
+
+# 启动后端
+echo ">>> 启动 Remnawave 后端..."
 docker compose up -d
 
-echo
-echo "=========================================="
-echo " Remnawave 面板 + Nginx 已全部部署完成！"
-echo "------------------------------------------"
-echo "面板访问地址：https://$MAIN_DOMAIN"
-echo "订阅域名（SUB_PUBLIC_DOMAIN）：$SUB_DOMAIN"
-echo "=========================================="
+# 4. 申请证书
+echo ">>> 准备申请证书..."
+mkdir -p "$NGINX_DIR"
+
+# 清理端口
+docker stop remnawave-nginx >/dev/null 2>&1 || true
+docker rm remnawave-nginx >/dev/null 2>&1 || true
+systemctl stop nginx >/dev/null
