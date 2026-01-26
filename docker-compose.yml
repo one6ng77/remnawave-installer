@@ -75,27 +75,6 @@ services:
         max-size: '100m'
         max-file: '10'
 
-  # --- 新增 Nginx 服务 ---
-  remnawave-nginx:
-    image: nginx:alpine
-    container_name: remnawave-nginx
-    restart: always
-    ports:
-      - "80:80"  # 暴露 HTTP 端口
-      # - "443:443" # 如果你配置了 SSL 证书，取消此行注释
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro # 挂载配置文件
-      - ./certs:/etc/nginx/certs:ro # 如果有 SSL 证书，挂载证书目录
-    networks:
-      - remnawave-network
-    depends_on:
-      - remnawave
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '100m'
-        max-file: '10'
-
 networks:
   remnawave-network:
     name: remnawave-network
