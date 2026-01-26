@@ -59,29 +59,36 @@ echo "证书邮箱: $EMAIL"
 echo
 
 #------------------------#
-# 2. 安装基础依赖与防火墙配置
+# 2. 安装基础依赖与【关闭防火墙】
 #------------------------#
-echo ">>> [1/8] 更新软件源并安装依赖 (curl, socat, cron, openssl, iptables)..."
+echo ">>> [1/8] 更新软件源并安装依赖..."
 apt-get update -y
 apt-get install -y curl socat cron openssl iptables ufw
 
-echo ">>> [2/8] 正在配置防火墙放行 80/443 端口..."
-# 尝试使用 UFW
+echo ">>> [2/8] 正在执行：关闭防火墙并放行所有端口..."
+
+# 1. 关闭 UFW
 if command -v ufw >/dev/null 2>&1; then
-    if ufw status | grep -q "Status: active"; then
-        ufw allow 80/tcp
-        ufw allow 443/tcp
-        ufw reload
-        echo "   - UFW 规则已添加。"
+    echo "   - 正在禁用 UFW..."
+    ufw disable
+fi
+
+# 2. 清空 iptables 规则并允许所有流量
+if command -v iptables >/dev/null 2>&1; then
+    echo "   - 正在清空 iptables 规则并允许所有连接..."
+    iptables -P INPUT ACCEPT
+    iptables -P FORWARD ACCEPT
+    iptables -P OUTPUT ACCEPT
+    iptables -F
+    iptables -X
+    
+    # 尝试保存规则 (如果安装了 iptables-persistent)
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save
     fi
 fi
 
-# 尝试使用 iptables (强制放行)
-if command -v iptables >/dev/null 2>&1; then
-    iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-    iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT
-    echo "   - iptables 规则已添加。"
-fi
+echo "✅ 防火墙已关闭，所有端口已放行。"
 
 #------------------------#
 # 3. 安装 Docker
@@ -116,19 +123,17 @@ if [ ! -f .env ]; then
 fi
 
 #------------------------#
-# 5. 配置 .env 并启动后端 (核心修复步骤)
+# 5. 配置 .env 并启动后端 (强制生成新密钥)
 #------------------------#
 echo ">>> [5/8] 正在强制生成新密钥并配置后端..."
 
-# === 强制替换逻辑 (不管原来是不是 changeme，统统换成新的随机密钥) ===
-# 这能彻底解决 "cannot be set to change_me" 的报错
+# === 强制替换逻辑 ===
 sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" .env
 sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" .env
 sed -i "s/^METRICS_PASS=.*/METRICS_PASS=$(openssl rand -hex 64)/" .env
 sed -i "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(openssl rand -hex 64)/" .env
 
 # === 强制重置数据库密码 ===
-# 为了防止数据库连接不上，这里也强制重置一次
 pw=$(openssl rand -hex 24)
 sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env
 sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^@]*\(@.*\)|\1$pw\2|" .env
@@ -162,7 +167,7 @@ ACME_SH="$HOME/.acme.sh/acme.sh"
 mkdir -p "$NGINX_DIR"
 
 # 切换 CA 为 Let's Encrypt
-echo "   - 切换 CA 为 Let's Encrypt (避免 ZeroSSL 报错)..."
+echo "   - 切换 CA 为 Let's Encrypt..."
 $ACME_SH --set-default-ca --server letsencrypt
 $ACME_SH --register-account -m "$EMAIL" || true
 
@@ -176,7 +181,7 @@ $ACME_SH --issue --standalone -d "$MAIN_DOMAIN" \
   --force
 
 if [ ! -f "$NGINX_DIR/fullchain.pem" ]; then
-    echo "❌ 证书申请失败！请检查防火墙是否放行 80 端口。"
+    echo "❌ 证书申请失败！请确认域名解析正确。"
     exit 1
 fi
 echo "✅ 证书申请成功。"
@@ -260,7 +265,7 @@ docker compose up -d
 
 echo
 echo "=========================================="
-echo " ✅ 修复完成！"
+echo " ✅ 修复完成！(防火墙已全部关闭)"
 echo " 面板地址：https://$MAIN_DOMAIN"
 echo " 订阅域名：$SUB_DOMAIN"
 echo "=========================================="
