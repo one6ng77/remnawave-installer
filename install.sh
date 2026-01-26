@@ -22,6 +22,7 @@ echo "5. 启动 Remnawave 面板容器"
 echo "6. 切换 CA 到 Let's Encrypt 并申请证书"
 echo "7. 生成 Nginx 配置（包含 HTTP 跳转）并启动"
 echo "=========================================="
+echo
 
 #------------------------#
 # 0. 检查 root 权限
@@ -109,8 +110,7 @@ if [ ! -f docker-compose.yml ]; then
   curl -o docker-compose.yml https://raw.githubusercontent.com/vlongx/remnawave-installer/refs/heads/main/docker-compose.yml
   
   # === 关键修复步骤 ===
-  # 远程文件里有一行 "/opt/remnawave/nginx:..." 被错误放在了 networks 下
-  # 这里使用 sed 自动删除那一行，防止 "undefined network" 报错
+  # 自动删除可能导致报错的错误路径配置
   echo "   - 正在自动修复 docker-compose.yml 中的格式错误..."
   sed -i '/\/opt\/remnawave\/nginx/d' docker-compose.yml
 else
@@ -125,16 +125,22 @@ else
 fi
 
 #------------------------#
-# 5. 配置 .env 并启动后端
+# 5. 配置 .env 并启动后端 (关键修复)
 #------------------------#
 echo ">>> [5/8] 生成密钥并启动后端..."
 
-if grep -q "JWT_AUTH_SECRET=changeme" .env; then
-    sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" .env
-    sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" .env
-    sed -i "s/^METRICS_PASS=.*/METRICS_PASS=$(openssl rand -hex 64)/" .env
-    sed -i "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(openssl rand -hex 64)/" .env
-    
+# === 强制修复 JWT 和其他应用密钥 ===
+# 无论之前是什么，都强制生成新的随机密钥，解决 "change_me" 导致的 502 错误
+echo "   - 正在强制重新生成安全密钥 (JWT/Secrets)..."
+sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" .env
+sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" .env
+sed -i "s/^METRICS_PASS=.*/METRICS_PASS=$(openssl rand -hex 64)/" .env
+sed -i "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(openssl rand -hex 64)/" .env
+
+# === 数据库密码处理 ===
+# 仅在检测到明显的默认值时修改，防止破坏现有数据库连接
+if grep -qE "POSTGRES_PASSWORD=change_?me" .env; then
+    echo "   - 检测到默认数据库密码，正在生成随机密码..."
     pw=$(openssl rand -hex 24)
     sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env
     sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^@]*\(@.*\)|\1$pw\2|" .env
@@ -148,6 +154,8 @@ else
 fi
 
 # 启动后端
+# 强制重启以应用新的 .env 配置
+docker compose down >/dev/null 2>&1 || true
 docker compose up -d
 echo ">>> Remnawave 后端容器已启动。"
 
@@ -166,7 +174,7 @@ fi
 ACME_SH="$HOME/.acme.sh/acme.sh"
 mkdir -p "$NGINX_DIR"
 
-# 切换 CA 为 Let's Encrypt (修复 ZeroSSL 限流问题)
+# 切换 CA 为 Let's Encrypt
 echo "   - 切换 CA 为 Let's Encrypt..."
 $ACME_SH --set-default-ca --server letsencrypt
 $ACME_SH --register-account -m "$EMAIL" || true
