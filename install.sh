@@ -93,10 +93,6 @@ else
   echo ">>> [3/8] Docker 已安装，跳过。"
 fi
 
-if ! docker compose version >/dev/null 2>&1; then
-  echo "警告：未检测到 docker compose 插件，请确认 Docker 安装正确。"
-fi
-
 #------------------------#
 # 4. 下载文件并修复格式错误
 #------------------------#
@@ -109,42 +105,33 @@ if [ ! -f docker-compose.yml ]; then
   echo "   - 正在下载 docker-compose.yml..."
   curl -o docker-compose.yml https://raw.githubusercontent.com/vlongx/remnawave-installer/refs/heads/main/docker-compose.yml
   
-  # === 关键修复步骤 ===
-  # 自动删除可能导致报错的错误路径配置
+  # === 修复官方文件的格式错误 ===
   echo "   - 正在自动修复 docker-compose.yml 中的格式错误..."
   sed -i '/\/opt\/remnawave\/nginx/d' docker-compose.yml
-else
-  echo "提示：已存在 docker-compose.yml，跳过下载。"
 fi
 
 # 下载 .env.sample
 if [ ! -f .env ]; then
   curl -o .env https://raw.githubusercontent.com/remnawave/backend/refs/heads/main/.env.sample
-else
-  echo "提示：已存在 .env，跳过下载 .env.sample。"
 fi
 
 #------------------------#
-# 5. 配置 .env 并启动后端 (关键修复)
+# 5. 配置 .env 并启动后端 (核心修复步骤)
 #------------------------#
-echo ">>> [5/8] 生成密钥并启动后端..."
+echo ">>> [5/8] 正在强制生成新密钥并配置后端..."
 
-# === 强制修复 JWT 和其他应用密钥 ===
-# 无论之前是什么，都强制生成新的随机密钥，解决 "change_me" 导致的 502 错误
-echo "   - 正在强制重新生成安全密钥 (JWT/Secrets)..."
+# === 强制替换逻辑 (不管原来是不是 changeme，统统换成新的随机密钥) ===
+# 这能彻底解决 "cannot be set to change_me" 的报错
 sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" .env
 sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" .env
 sed -i "s/^METRICS_PASS=.*/METRICS_PASS=$(openssl rand -hex 64)/" .env
 sed -i "s/^WEBHOOK_SECRET_HEADER=.*/WEBHOOK_SECRET_HEADER=$(openssl rand -hex 64)/" .env
 
-# === 数据库密码处理 ===
-# 仅在检测到明显的默认值时修改，防止破坏现有数据库连接
-if grep -qE "POSTGRES_PASSWORD=change_?me" .env; then
-    echo "   - 检测到默认数据库密码，正在生成随机密码..."
-    pw=$(openssl rand -hex 24)
-    sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env
-    sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^@]*\(@.*\)|\1$pw\2|" .env
-fi
+# === 强制重置数据库密码 ===
+# 为了防止数据库连接不上，这里也强制重置一次
+pw=$(openssl rand -hex 24)
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env
+sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^@]*\(@.*\)|\1$pw\2|" .env
 
 # 设置订阅域名
 if grep -q "^SUB_PUBLIC_DOMAIN=" .env; then
@@ -153,11 +140,11 @@ else
   echo "SUB_PUBLIC_DOMAIN=${SUB_DOMAIN}/api/sub" >> .env
 fi
 
-# 启动后端
-# 强制重启以应用新的 .env 配置
+# 停止旧容器并启动新容器
+echo "   - 正在重启后端容器以应用新密钥..."
 docker compose down >/dev/null 2>&1 || true
 docker compose up -d
-echo ">>> Remnawave 后端容器已启动。"
+echo ">>> Remnawave 后端容器已重新启动。"
 
 #------------------------#
 # 6. 申请 SSL 证书
@@ -175,7 +162,7 @@ ACME_SH="$HOME/.acme.sh/acme.sh"
 mkdir -p "$NGINX_DIR"
 
 # 切换 CA 为 Let's Encrypt
-echo "   - 切换 CA 为 Let's Encrypt..."
+echo "   - 切换 CA 为 Let's Encrypt (避免 ZeroSSL 报错)..."
 $ACME_SH --set-default-ca --server letsencrypt
 $ACME_SH --register-account -m "$EMAIL" || true
 
@@ -273,7 +260,7 @@ docker compose up -d
 
 echo
 echo "=========================================="
-echo " ✅ Remnawave 安装完成！"
+echo " ✅ 修复完成！"
 echo " 面板地址：https://$MAIN_DOMAIN"
 echo " 订阅域名：$SUB_DOMAIN"
 echo "=========================================="
