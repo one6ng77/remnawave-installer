@@ -86,7 +86,7 @@ cd "$INSTALL_DIR"
 
 # 下载 docker-compose.yml
 if [ ! -f docker-compose.yml ]; then
-  curl -o docker-compose.yml https://raw.githubusercontent.com/remnawave/backend/refs/heads/main/docker-compose-prod.yml
+  curl -o docker-compose.yml https://raw.githubusercontent.com/vlongx/remnawave-installer/refs/heads/main/docker-compose.yml
 else
   echo "提示：已存在 docker-compose.yml，跳过下载。"
 fi
