@@ -17,7 +17,6 @@ services:
       - remnawave-db-data:/var/lib/postgresql/data
     networks:
       - remnawave-network
-      - '/opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 3s
@@ -63,12 +62,35 @@ services:
         condition: service_healthy
       remnawave-redis:
         condition: service_healthy
+    # 如果你需要之前的那个路径映射，请在 volumes 下取消注释，而不是放在 networks 下
+    # volumes:
+    #   - /opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl
     healthcheck:
       test: ['CMD-SHELL', 'curl -f http://localhost:${METRICS_PORT:-3001}/health']
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '100m'
+        max-file: '10'
+
+  # Nginx 代理服务
+  remnawave-nginx:
+    image: nginx:alpine
+    container_name: remnawave-nginx
+    restart: always
+    ports:
+      - "80:80"
+      # - "443:443" # 如果配置了 SSL 请开启
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - remnawave-network
+    depends_on:
+      - remnawave
     logging:
       driver: 'json-file'
       options:
