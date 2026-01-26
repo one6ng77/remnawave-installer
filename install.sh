@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Remnawave + Nginx 一键安装脚本
+# Remnawave 一键安装脚本（面板 + 证书 + Nginx 反代）
+# 修复：切换 Let's Encrypt，增加 80->443 跳转
 
 set -e
 
@@ -7,7 +8,7 @@ INSTALL_DIR="/opt/remnawave"
 NGINX_DIR="/opt/remnawave/nginx"
 
 echo "==============================="
-echo " Remnawave + Nginx一键安装脚本 "
+echo " Remnawave 一键安装脚本 "
 echo "==============================="
 echo
 echo "本脚本将完成以下操作："
@@ -281,7 +282,7 @@ docker compose up -d
 
 echo
 echo "=========================================="
-echo " Remnawave + Nginx 已全部部署完成！"
+echo " Remnawave 面板 + Nginx 已全部部署完成！"
 echo "------------------------------------------"
 echo "面板访问地址：https://$MAIN_DOMAIN"
 echo "订阅域名（SUB_PUBLIC_DOMAIN）：$SUB_DOMAIN"
