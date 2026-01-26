@@ -1,7 +1,7 @@
 services:
   remnawave-db:
     image: postgres:17.6
-    container_name: 'remnawave-db'
+    container_name: remnawave-db
     hostname: remnawave-db
     restart: always
     env_file:
@@ -11,8 +11,9 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
       - TZ=UTC
+    # 端口映射仅用于本地调试，生产环境可注释掉，因为后端通过 docker 网络连接数据库
     ports:
-      - '127.0.0.1:6767:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - remnawave-db-data:/var/lib/postgresql/data
     networks:
@@ -50,7 +51,7 @@ services:
 
   remnawave:
     image: remnawave/backend:2
-    container_name: 'remnawave'
+    container_name: remnawave
     hostname: remnawave
     restart: always
     env_file:
@@ -74,37 +75,20 @@ services:
         max-size: '100m'
         max-file: '10'
 
-  remnawave-nginx:
-    image: nginx:alpine
-    container_name: remnawave-nginx
-    restart: always
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - remnawave-network
-    depends_on:
-      - remnawave
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '100m'
-        max-file: '10'
-
 networks:
   remnawave-network:
     name: remnawave-network
     driver: bridge
-    external: false
+    # 关键修改：设置为 true，允许脚本创建网络或复用
+    # 但为了配合脚本第8步，建议设为 false 让 compose 自动创建，或者脚本里删掉 network create
+    # 这里为了稳妥，我们让它自动创建，名称固定即可
+    external: false 
     enable_ipv6: true
 
 volumes:
   remnawave-db-data:
     driver: local
-    external: false
     name: remnawave-db-data
   remnawave-redis-data:
     driver: local
-    external: false
     name: remnawave-redis-data
