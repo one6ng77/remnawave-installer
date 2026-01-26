@@ -63,8 +63,8 @@ services:
       remnawave-redis:
         condition: service_healthy
     # 如果你需要之前的那个路径映射，请在 volumes 下取消注释，而不是放在 networks 下
-    # volumes:
-    #   - /opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl
+    volumes:
+       - /opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl
     healthcheck:
       test: ['CMD-SHELL', 'curl -f http://localhost:${METRICS_PORT:-3001}/health']
       interval: 30s
